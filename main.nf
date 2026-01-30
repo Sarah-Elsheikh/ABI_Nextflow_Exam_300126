@@ -7,43 +7,28 @@ params.out = "data_out"
 workflow {
 // check that the user provides input Fasta files
     if (params.in == null) {
-        println ("Error: provide input directory containing Fasta files")
+        println ("Error: provide path to directory containing Fasta files")
         exit 1
     }
 
 //    println("$params.accession, $params.in, $params.out")
 
     def ch_reference = fetch_reference(params.accession) 
-        | view
     
-    def ch_input = Channel.fromPath(params.in)
-        // .mix (ch_reference)
-        // .collect ()
+    def ch_input = Channel.fromPath("${params.in}/*.fasta", checkIfExists: true)
     
-    combine_fastas(ch_input)
-        | view
+    ch_input
+        .mix(ch_reference)
+        .collect()
+        .set {ch_combined_for_merge}
+    
+    def ch_combine_fastas = combine_fastas(ch_combined_for_merge)
 
+    def ch_alignment = align_mafft(ch_combine_fastas)
 
-
-
-    //def ch_input = channel.fromSRA(params.data, apiKey: "d5822ef54698cb072e0cf866736fd5f6ab08")
-    //    | view
-
-//     def ch_input = fetch_data(params.data) 
-//     //    | view
-
-//     // now this is how we connect
-
-
-//     // we will use ch_input multiple times, so we define them here
-//     // we output 3 different channels in the output
-//     fastp(ch_input).sample_ID
-//         | view
-
-//     fastqc(ch_input)
-//         | view
+    trimal_cleanup(ch_alignment).fasta
+        // |view
 }
-
 
 // fetch the reference from the database
 process fetch_reference {
@@ -78,17 +63,38 @@ process combine_fastas {
     """
 }
 
-// process fetch_data {
-//     conda "bioconda::sra-tools=3.2.1"
+process align_mafft {
+    conda 'bioconda::mafft=7.525'
 
-//     input:
-//     val sra_num
+    input:
+    path combined_fasta
 
-//     output:
-//     path "*.fastq.gz"
+    output:
+    path "alignment.fasta"
 
-//     script:
-//     """
-//     prefetch "$sra_num"
-//     """
-// }
+    script:
+    """
+    mafft ${combined_fasta} > alignment.fasta
+    """
+}
+
+process trimal_cleanup {
+    publishDir "${params.out}", mode: 'copy'
+    conda 'bioconda::trimal=1.5.0'
+
+    input:
+    path alignment
+
+    output:
+    path "alignment_trimmed.fasta", emit: fasta
+    path "alignment_trimmed.html", emit: html
+
+    script:
+    """
+    trimal -in ${alignment} \
+           -out alignment_trimmed.fasta \
+           -htmlout alignment_trimmed.html \
+           -automated1
+    """
+}
+
